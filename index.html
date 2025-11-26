@@ -1090,23 +1090,80 @@ function CariesPreventionGame() {
             )}
 
             {level >= 5 && (
-              <Card title="You Did It!">
-                <p className="text-gray-700">
-                  You mastered <b>candy risk</b>, <b>brushing</b>, <b>flossing</b>, <b>sealants</b>, and <b>regular checkups</b>.
-                </p>
-                <ul className="list-disc ml-6 mt-3 text-gray-700 text-sm">
-                  <li>Limit sugary snacks; rinse or brush after treats.</li>
-                  <li>Brush 2×/day for 2 minutes with fluoride toothpaste.</li>
-                  <li>Floss once a day to clean where brushes can’t reach.</li>
-                  <li>Ask about sealants for new molars.</li>
-                  <li>High-risk recall: every 3 months.</li>
-                </ul>
-                <div className="mt-4 flex items-center">
-                  <Button onClick={() => { window.location.reload(); }}>Play Again</Button>
-                  <Button variant="ghost" onClick={() => window.print()}>Print Tips</Button>
-                </div>
-              </Card>
-            )}
+  <Card title="You Did It!">
+    <p className="text-gray-700">
+      You mastered <b>candy risk</b>, <b>brushing</b>, <b>flossing</b>, <b>sealants</b>, and <b>regular checkups</b>.
+    </p>
+
+    <ul className="list-disc ml-6 mt-3 text-gray-700 text-sm">
+      <li>Limit sugary snacks; rinse or brush after treats.</li>
+      <li>Brush 2×/day for 2 minutes with fluoride toothpaste.</li>
+      <li>Floss once a day to clean where brushes can’t reach.</li>
+      <li>Ask about sealants for new molars.</li>
+      <li>High-risk recall: every 3 months.</li>
+    </ul>
+
+    {/* NEW: explanations + citations + ADA references */}
+    <div className="mt-5 border-t pt-4">
+      <h3 className="text-base font-semibold text-gray-900">Why these habits matter</h3>
+
+      <div className="mt-3 space-y-3 text-sm text-gray-700">
+        <p>
+          <b>Candy risk:</b> Candy and sugary drinks give mouth germs “fuel.” Those germs make acid,
+          and that acid can weaken your tooth enamel and start cavities. <sup>[1]</sup>
+        </p>
+
+        <p>
+          <b>Brushing:</b> Brushing is cleaning your teeth with a toothbrush and fluoride toothpaste.
+          It’s important because it removes plaque and helps protect your teeth when you brush
+          2 times a day for 2 minutes. <sup>[2]</sup>
+        </p>
+
+        <p>
+          <b>Flossing:</b> Flossing is using a soft string to clean between your teeth. It’s important
+          because it cleans places your toothbrush can’t reach, so you remove plaque between teeth once a day.{" "}
+          <sup>[3]</sup>
+        </p>
+
+        <p>
+          <b>Sealants:</b> Sealants are a thin protective coating a dentist puts on the chewing tops of back teeth.
+          It’s important because sealants block germs and food from getting stuck in the tiny grooves. <sup>[4]</sup>
+        </p>
+
+        <p>
+          <b>Regular checkups:</b> Regular checkups are dentist visits to look at your teeth and clean them.
+          It’s important because the dentist can find problems early and help prevent bigger problems later.{" "}
+          <sup>[5]</sup>
+        </p>
+      </div>
+
+      <h3 className="mt-4 text-base font-semibold text-gray-900">References (ADA style)</h3>
+      <ol className="mt-2 list-decimal ml-6 text-xs text-gray-600 space-y-1">
+        <li>
+          American Dental Association. <i>Let Them Eat Cake?: Study Reveals Grandparents Spoil Grandchildren with Sugar-Loaded Foods and Drinks.</i>{" "}
+          Press release. February 13, 2023. Accessed November 25, 2025.
+        </li>
+        <li>
+          American Dental Association. <i>Home Oral Care.</i> Updated August 8, 2024. Accessed November 25, 2025.
+        </li>
+        <li>
+          American Dental Association. <i>Dental Floss/Interdental Cleaners.</i> Accessed November 25, 2025.
+        </li>
+        <li>
+          American Dental Association. <i>Dental Sealants.</i> Accessed November 25, 2025.
+        </li>
+        <li>
+          MouthHealthy (American Dental Association). <i>Common Questions About Going to the Dentist.</i> Accessed November 25, 2025.
+        </li>
+      </ol>
+    </div>
+
+    <div className="mt-4 flex items-center">
+      <Button onClick={() => { window.location.reload(); }}>Play Again</Button>
+      <Button variant="ghost" onClick={() => window.print()}>Print Tips</Button>
+    </div>
+  </Card>
+)}
 
             <footer className="mt-8 text-xs text-gray-500">WesternU Dental Medicine.</footer>
           </div>
