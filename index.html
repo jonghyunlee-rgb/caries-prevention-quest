@@ -1,0 +1,1122 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Caries Prevention Quest</title>
+  <meta name="description" content="Kid-friendly web game: candy cracks, OHI, floss, sealants, and regular visits." />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    html,body{height:100%}
+    .no-select{user-select:none;-webkit-user-select:none}
+  </style>
+</head>
+<body class="bg-sky-50">
+  <div id="root"></div>
+
+  <!-- React + Babel (UMD) -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script type="text/babel">
+    const { useEffect, useMemo, useRef, useState, useContext, createContext } = React;
+
+    /* -------------------------
+       Minimal sound engine
+       ------------------------- */
+    class SoundEngine {
+      constructor(){
+        this.ctx = null;
+        this.master = null;
+        this.sfx = null;
+        this.music = null;
+        this.musicTimer = null;
+        this.enabled = false;
+        this.musicOn = false;
+        this.muted = false;
+        this.step = 0;
+      }
+      start(){
+        if (this.enabled) return;
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const master = ctx.createGain(); master.gain.value = 0.6; master.connect(ctx.destination);
+        const sfx = ctx.createGain(); sfx.gain.value = 0.9; sfx.connect(master);
+        const music = ctx.createGain(); music.gain.value = 0.35; music.connect(master);
+        this.ctx = ctx; this.master = master; this.sfx = sfx; this.music = music;
+        this.enabled = true;
+      }
+      toggleMute(){
+        this.muted = !this.muted;
+        if (this.master) this.master.gain.value = this.muted ? 0 : 0.6;
+      }
+      toggleMusic(){
+        if (!this.enabled) this.start();
+        this.musicOn = !this.musicOn;
+        if (this.musicOn) this._startMusic();
+        else this._stopMusic();
+      }
+      _startMusic(){
+        if (this.musicTimer) return;
+        // Simple happy arpeggio loop in C major
+        const scale = [261.63,293.66,329.63,349.23,392.00,440.00,493.88]; // C D E F G A B
+        this.step = 0;
+        this.musicTimer = setInterval(()=>{
+          if (!this.enabled || !this.musicOn) return;
+          const root = 0; // C
+          const pattern = [0,2,4,5,4,2,0,2]; // arpeggio-ish
+          const i = pattern[this.step % pattern.length];
+          const f1 = scale[(root + i) % scale.length];
+          const f2 = scale[(root + i + 4) % scale.length]; // a third above
+          this._tone(f1, 0.22, "sine", 0.03, this.music);
+          this._tone(f2, 0.22, "triangle", 0.02, this.music, 0.02);
+          if (this.step % 4 === 0) this._tone(130.81, 0.32, "sine", 0.015, this.music); // soft bass C3
+          this.step++;
+        }, 320);
+      }
+      _stopMusic(){
+        if (this.musicTimer) { clearInterval(this.musicTimer); this.musicTimer = null; }
+      }
+
+      _tone(freq, dur=0.1, type="sine", gain=0.05, targetNode=this.sfx, attack=0.005){
+        if (!this.enabled || this.muted) return;
+        const t = this.ctx.currentTime;
+        const o = this.ctx.createOscillator();
+        const g = this.ctx.createGain();
+        o.type = type; o.frequency.setValueAtTime(freq, t);
+        g.gain.setValueAtTime(0, t);
+        g.gain.linearRampToValueAtTime(gain, t + attack);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+        o.connect(g).connect(targetNode);
+        o.start(t); o.stop(t + dur + 0.05);
+      }
+      _noise(dur=0.05, gain=0.04, type="white", targetNode=this.sfx){
+        if (!this.enabled || this.muted) return;
+        const t = this.ctx.currentTime;
+        const bufferSize = Math.floor(this.ctx.sampleRate * dur);
+        const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let i = 0; i < bufferSize; i++) data[i] = (Math.random()*2-1) * (type==="white"?1:1);
+        const src = this.ctx.createBufferSource(); src.buffer = buffer;
+        const g = this.ctx.createGain(); g.gain.value = gain;
+        // gentle filter to make it less harsh
+        const f = this.ctx.createBiquadFilter(); f.type = "lowpass"; f.frequency.value = 1800;
+        src.connect(f).connect(g).connect(targetNode);
+        src.start(t);
+      }
+
+      play(kind){
+        if (!this.enabled || this.muted) return;
+        switch(kind){
+          case "click":
+            this._tone(900, 0.06, "square", 0.03);
+            break;
+          case "drop":
+            this._tone(700, 0.08, "triangle", 0.03);
+            this._tone(500, 0.10, "sine", 0.02, this.sfx, 0.01);
+            break;
+          case "impact": { // downward blip
+            const t = this.ctx.currentTime;
+            const o = this.ctx.createOscillator();
+            const g = this.ctx.createGain();
+            o.type = "sawtooth";
+            o.frequency.setValueAtTime(800, t);
+            o.frequency.exponentialRampToValueAtTime(220, t + 0.12);
+            g.gain.setValueAtTime(0.04, t);
+            g.gain.exponentialRampToValueAtTime(0.0001, t + 0.15);
+            o.connect(g).connect(this.sfx);
+            o.start(t); o.stop(t + 0.16);
+            break;
+          }
+          case "brushTick":
+            this._noise(0.04, 0.025);
+            break;
+          case "clean":
+            this._tone(1200, 0.05, "triangle", 0.02);
+            this._tone(1600, 0.06, "sine", 0.02, this.sfx, 0.005);
+            break;
+          case "floss":
+            this._tone(1000, 0.04, "square", 0.02);
+            break;
+          case "paint":
+            this._tone(600, 0.05, "triangle", 0.015);
+            break;
+          case "success":
+            this._tone(880, 0.12, "triangle", 0.03);
+            this._tone(1175, 0.14, "triangle", 0.03, this.sfx, 0.01);
+            this._tone(1760, 0.16, "sine", 0.025, this.sfx, 0.01);
+            break;
+          case "fail":
+            this._tone(200, 0.16, "sawtooth", 0.03);
+            this._tone(140, 0.18, "sawtooth", 0.03, this.sfx, 0.01);
+            break;
+        }
+      }
+    }
+
+    const SoundContext = createContext(null);
+    const useSound = () => useContext(SoundContext);
+
+    /* -------------------------------------------
+       Tooth SVGs (primary dentition silhouettes)
+       ------------------------------------------- */
+    const PRIMARY_ARCH = [
+      "secondMolar","firstMolar","canine","lateralIncisor","centralIncisor",
+      "centralIncisor","lateralIncisor","canine","firstMolar","secondMolar"
+    ];
+    const ANTERIOR_ARCH = [
+      "canine","lateralIncisor","centralIncisor",
+      "centralIncisor","lateralIncisor","canine"
+    ];
+
+    function pathForTooth(type){
+      switch(type){
+        case "centralIncisor":
+          return "M50 6 C36 6,22 20,22 38 C22 60,36 64,38 78 C42 96,48 112,50 112 C52 112,58 96,62 78 C64 64,78 60,78 38 C78 20,64 6,50 6 Z";
+        case "lateralIncisor":
+          return "M50 8 C38 8,26 22,26 40 C26 58,36 62,38 76 C41 92,47 110,50 110 C53 110,59 92,62 76 C64 62,74 58,74 40 C74 22,62 8,50 8 Z";
+        case "canine":
+          return "M50 4 C42 10,30 26,28 42 C26 58,36 68,38 82 C42 100,48 112,50 112 C52 112,58 100,62 82 C64 68,74 58,72 42 C70 26,58 10,50 4 Z";
+        case "firstMolar":
+          return "M30 18 C22 18,18 30,18 42 C18 58,30 70,36 82 C40 92,44 108,50 108 C56 108,60 92,64 82 C70 70,82 58,82 42 C82 30,78 18,70 18 C60 12,40 12,30 18 Z";
+        case "secondMolar":
+        default:
+          return "M26 20 C18 20,14 32,14 44 C14 62,28 72,34 86 C38 98,44 110,50 110 C56 110,62 98,66 86 C72 72,86 62,86 44 C86 32,82 20,74 20 C62 12,38 12,26 20 Z";
+      }
+    }
+
+    const Tooth = ({ clean = false, size="w-10 h-12", type="firstMolar", label }) => {
+      const d = pathForTooth(type);
+      const stroke = clean ? "#cbd5e1" : "#f59e0b";
+      return (
+        <svg
+          viewBox="0 0 100 120"
+          className={`${size} m-0.5 drop-shadow-sm`}
+          role="img"
+          aria-label={label || `${type} ${clean ? "clean" : "needs cleaning"}`}
+        >
+          <defs>
+            <radialGradient id="shine" cx="45%" cy="28%" r="60%">
+              <stop offset="0%" stopColor="#ffffff"/>
+              <stop offset="70%" stopColor={clean ? "#f3f6fb" : "#fef3c7"}/>
+              <stop offset="100%" stopColor={clean ? "#e5edf7" : "#fde68a"}/>
+            </radialGradient>
+          </defs>
+          <path d={d} fill={clean ? "url(#shine)" : "#fde68a"} stroke={stroke} strokeWidth="2"/>
+          {type.includes("Incisor") && (
+            <path d="M30 44 C40 38,60 38,70 44" stroke={clean ? "#94a3b8" : "#b45309"} strokeWidth="2" fill="none" opacity="0.35" />
+          )}
+          {type === "canine" && (
+            <path d="M35 46 C50 36,65 46,65 46" stroke={clean ? "#94a3b8" : "#b45309"} strokeWidth="2" fill="none" opacity="0.35" />
+          )}
+          {type.includes("Molar") && (
+            <path d="M28 48 C42 38,58 58,72 48 M50 30 C52 46,52 62,50 76"
+                  stroke={clean ? "#94a3b8" : "#b45309"} strokeWidth="2" fill="none" opacity="0.45" />
+          )}
+        </svg>
+      );
+    };
+
+    /* --------- Shared UI --------- */
+    const Progress = ({ value }) => (
+      <div className="w-full bg-gray-200 rounded-full h-3">
+        <div className="h-3 rounded-full transition-all bg-blue-500" style={{ width: `${Math.min(100, Math.max(0, value))}%` }} />
+      </div>
+    );
+
+    const Card = ({ title, children, footer }) => (
+      <div className="bg-white rounded-2xl shadow-lg p-5 border border-gray-100 w-full max-w-4xl">
+        <div className="flex items-center justify-between">
+          <h2 className="text-xl font-semibold mb-3">{title}</h2>
+        </div>
+        <div>{children}</div>
+        {footer && <div className="mt-4 text-sm text-gray-600">{footer}</div>}
+      </div>
+    );
+
+    const Button = ({ children, onClick, variant = "default", disabled }) => {
+      const sound = useSound();
+      const handle = (e) => {
+        sound?.play("click");
+        onClick?.(e);
+      };
+      return (
+        <button
+          onClick={handle}
+          disabled={disabled}
+          className={`px-4 py-2 rounded-xl font-medium shadow-sm transition-all mr-2 mb-2 ${
+            variant === "default"
+              ? "bg-blue-600 text-white hover:bg-blue-700 disabled:bg-blue-300"
+              : variant === "ghost"
+              ? "bg-white border border-gray-300 hover:bg-gray-50"
+              : variant === "success"
+              ? "bg-emerald-600 text-white hover:bg-emerald-700 disabled:bg-emerald-300"
+              : "bg-slate-800 text-white hover:bg-slate-900"
+          }`}
+        >
+          {children}
+        </button>
+      );
+    };
+
+    function useTimer(active, seconds, onDone) {
+      const [time, setTime] = useState(seconds);
+      useEffect(() => { if (active) setTime(seconds); }, [seconds, active]);
+      useEffect(() => {
+        if (!active) return;
+        const id = setInterval(() => {
+          setTime(t => {
+            if (t <= 1) { clearInterval(id); onDone?.(); return 0; }
+            return t - 1;
+          });
+        }, 1000);
+        return () => clearInterval(id);
+      }, [active, onDone]);
+      return time;
+    }
+
+    /* -----------------------------------------
+       Level 1: Candy Crack
+       ----------------------------------------- */
+    function CandyCrack({ onComplete }) {
+      const sound = useSound();
+      const sceneRef = useRef(null);
+
+      const [hits, setHits] = useState(0);
+      const [severity, setSeverity] = useState(0);
+      const [played, setPlayed] = useState(false);
+      const [brushing, setBrushing] = useState(false);
+      const [cap, setCap] = useState("Drop a candy onto the tooth.");
+      const canNext = played && severity === 0;
+
+      const hitsRef = useRef(0);
+      const sevRef  = useRef(0);
+      const brushIntervalRef = useRef(null);
+      useEffect(() => { hitsRef.current = hits; }, [hits]);
+      useEffect(() => { sevRef.current  = severity; }, [severity]);
+
+    // smoothed bar (snappier)
+const [sevBar, setSevBar] = useState(0);
+const sevBarRef = useRef(0);
+const sevAnimRef = useRef(null);
+useEffect(() => {
+  if (sevAnimRef.current) cancelAnimationFrame(sevAnimRef.current);
+  const SMOOTHING = 0.45; // was 0.2
+  const step = () => {
+    const target = sevRef.current;
+    const curr   = sevBarRef.current;
+    const diff   = target - curr;
+    if (Math.abs(diff) < 0.2) {
+      sevBarRef.current = target;
+      setSevBar(target);
+      sevAnimRef.current = null;
+      return;
+    }
+    const next = curr + diff * SMOOTHING;
+    sevBarRef.current = next;
+    setSevBar(next);
+    sevAnimRef.current = requestAnimationFrame(step);
+  };
+  sevAnimRef.current = requestAnimationFrame(step);
+  return () => sevAnimRef.current && cancelAnimationFrame(sevAnimRef.current);
+}, [severity]);
+
+
+
+      const els = useRef({});
+      useEffect(() => {
+        const scene = sceneRef.current;
+        const toothSVG = scene.querySelector("#toothSVG");
+        els.current = {
+          scene, toothSVG,
+          cracks: scene.querySelector("#cracks"),
+          pit: scene.querySelector("#pit"),
+          mainCrack: scene.querySelector("#mainCrack"),
+          branch1: scene.querySelector("#branch1"),
+          branch2: scene.querySelector("#branch2"),
+          branch3: scene.querySelector("#branch3"),
+          plaque: scene.querySelector("#plaque"),
+          brush: scene.querySelector("#brush"),
+          foam: scene.querySelector("#foam"),
+        };
+        applyCrackVisuals(0, 0);
+      }, []);
+
+      const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+      function flashImpact(pxX, pxY) {
+        const { toothSVG } = els.current;
+        if (!toothSVG) return;
+        const pt = toothSVG.createSVGPoint();
+        pt.x = pxX; pt.y = pxY;
+        const p = pt.matrixTransform(toothSVG.getScreenCTM().inverse());
+        const circ = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        circ.setAttribute("cx", p.x);
+        circ.setAttribute("cy", 110);
+        circ.setAttribute("r", 3);
+        circ.setAttribute("fill", "#fff");
+        circ.setAttribute("opacity", "0.9");
+        toothSVG.appendChild(circ);
+        circ.animate([{opacity:0.9,r:3},{opacity:0.0,r:22}],{duration:280,easing:'ease-out'}).onfinish=()=>circ.remove();
+      }
+
+      function applyCrackVisuals(nextSeverity, nextHits) {
+        const { cracks, pit, mainCrack, branch1, branch2, branch3 } = els.current;
+        if (!cracks || !pit) return;
+        const s = clamp(nextSeverity, 0, 100);
+
+        if (s <= 0 && nextHits === 0) {
+          cracks.style.opacity = "0";
+          pit.setAttribute("opacity","0.0");
+          pit.setAttribute("r","0.1");
+          [branch1, branch2, branch3].forEach(p=>p && (p.style.opacity="0"));
+          [mainCrack, branch1, branch2, branch3].forEach(p=>p && (p.style.strokeWidth="1.4"));
+          cracks.style.stroke = "#4b3b34";
+          return;
+        }
+
+        cracks.style.opacity = s > 0 ? "1" : "0.0001";
+        const sw = 1.4 + (s/100)*3.8;
+        [mainCrack, branch1, branch2, branch3].forEach(p=>p && (p.style.strokeWidth = sw.toFixed(2)));
+
+        const r = Math.round(0x4b + (0x1a-0x4b)*(s/100));
+        const g = Math.round(0x3b + (0x14-0x3b)*(s/100));
+        const b = Math.round(0x34 + (0x12-0x34)*(s/100));
+        cracks.style.stroke = `rgb(${r},${g},${b})`;
+
+        branch1.style.opacity = s > 20 ? "1" : "0";
+        branch2.style.opacity = s > 45 ? "1" : "0";
+        branch3.style.opacity = s > 70 ? "1" : "0";
+
+        const pitR = 0.5 + (s/100)*10;
+        pit.setAttribute("r", pitR.toFixed(2));
+        pit.setAttribute("opacity", s > 0 ? Math.min(0.85, 0.2 + (s/100)).toFixed(2) : "0.0");
+      }
+
+      function applyImpact(deltaSev = 9) {
+        const nh = hitsRef.current + 1;
+        const ns = clamp(sevRef.current + deltaSev, 0, 100);
+        setHits(nh); setSeverity(ns); setPlayed(true);
+        hitsRef.current = nh; sevRef.current = ns;
+        sound?.play("impact");
+
+        const { plaque } = els.current;
+        if (plaque) plaque.style.opacity = String(Math.min(0.45, 0.10 + nh * 0.03));
+        applyCrackVisuals(ns, nh);
+      }
+
+      function impactAt(pxX, pxY) {
+        setCap("Ouch! The crack deepens and darkens.");
+        applyImpact(9);
+        flashImpact(pxX, pxY);
+      }
+
+      function dropCandy() {
+        sound?.play("drop");
+        const { scene } = els.current;
+        if (!scene) return;
+        const rect = scene.getBoundingClientRect();
+        const minX = rect.width*0.23, maxX = rect.width*0.77;
+        const left = minX + Math.random()*(maxX-minX);
+
+        const c = document.createElement("div");
+        c.className = "absolute w-7 h-7 rounded-full";
+        c.style.background = "repeating-linear-gradient(45deg,#ff7aa2 0 7px,#ffd4e3 7px 14px)";
+        c.style.boxShadow = "inset 0 0 6px rgba(0,0,0,.3)";
+        c.style.left = left + "px";
+        c.style.top  = "-18px";
+        c.style.borderRadius = "50%";
+        c.style.transform = "translate(-50%,-50%) rotate(0deg)";
+        scene.appendChild(c);
+
+        let y = -18, vy = 1 + Math.random()*0.7, rot = 0;
+        const g = 0.28, targetY = rect.height*0.28;
+
+        const tick = () => {
+          vy += g; y += vy; rot += 6 + Math.random()*2;
+          c.style.transform = `translate(-50%,-50%) translateY(${y}px) rotate(${rot}deg)`;
+          if (y >= targetY) {
+            c.style.transition = "opacity .16s ease"; c.style.opacity = "0";
+            impactAt(left, targetY);
+            setTimeout(()=>c.remove(), 180);
+            return;
+          }
+          requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      }
+
+      function resetAll() {
+        setHits(0); setSeverity(0); hitsRef.current=0; sevRef.current=0;
+        setPlayed(false); setBrushing(false); setCap("Reset. Drop a candy onto the tooth.");
+        if (brushIntervalRef.current){ clearInterval(brushIntervalRef.current); brushIntervalRef.current = null; }
+        const { cracks, pit, plaque, mainCrack, branch1, branch2, branch3, brush } = els.current;
+        if (cracks) cracks.style.opacity = "0";
+        if (pit) { pit.setAttribute("r","0.1"); pit.setAttribute("opacity","0.0"); }
+        if (plaque) plaque.style.opacity = "0.10";
+        [mainCrack,branch1,branch2,branch3].forEach(p=>p && (p.style.strokeWidth="1.4"));
+        if (brush) { brush.style.opacity = "0"; brush.style.transform = "translateX(0) rotate(0deg)"; }
+      }
+
+     function runBrush() {
+  const { scene, brush, foam, plaque } = els.current;
+  if (!scene || !brush) return;
+  if (brushing) return;
+  setBrushing(true);
+
+  const rect = scene.getBoundingClientRect();
+  brush.style.opacity = "1";
+  brush.style.transition = "none";
+  brush.style.left = `${rect.width/2 - 80}px`;
+  brush.style.top  = `${rect.height*0.22}px`;
+
+  // tuned parameters
+  const INTERVAL_MS = 16;     // was 60
+  const SPEED = 5.5;          // was 3.4
+  const MAX_SWING = 42;       // was 34
+  const DECAY_PER_TICK = 0.75;// was 0.28  (≈ ~45/sec at 16ms)
+  const CLEAN_BUFF_MS = 1200; // brief buff even if already clean
+  const SOUND_EVERY = 5;      // throttle brush tick sound
+
+  let offset = 0, dir = 1, tickN = 0;
+  const startT = Date.now();
+
+  if (brushIntervalRef.current) clearInterval(brushIntervalRef.current);
+
+  brushIntervalRef.current = setInterval(() => {
+    // motion
+    offset += dir * SPEED;
+    if (offset > MAX_SWING || offset < -MAX_SWING) dir *= -1;
+    const tilt = (offset / MAX_SWING) * 8;
+    brush.style.transform = `translateX(${offset}px) rotate(${tilt}deg)`;
+
+    // foam pulse
+    if (foam) {
+      const pulsate = 0.35 + 0.5 * Math.abs(Math.sin(offset * 0.12));
+      foam.style.opacity = pulsate.toFixed(2);
+    }
+
+    // subtle brushing noise (throttled)
+    if (++tickN % SOUND_EVERY === 0) sound?.play("brushTick");
+
+    // scrub severity down faster
+    if (sevRef.current > 0) {
+      const ns = Math.max(0, sevRef.current - DECAY_PER_TICK);
+      setSeverity(ns);
+      sevRef.current = ns;
+      applyCrackVisuals(ns, hitsRef.current);
+
+      if (plaque) {
+        const curr = parseFloat(plaque.style.opacity || "0.10");
+        plaque.style.opacity = String(Math.max(0.04, curr - 0.006));
+      }
+    }
+
+    const stillDirty = sevRef.current > 0;
+    const stillBuffing = Date.now() - startT < CLEAN_BUFF_MS;
+    if (!stillDirty && !stillBuffing) finishBrushing();
+  }, INTERVAL_MS);
+
+  setCap("Brushing… small circles!");
+
+  function finishBrushing(){
+    if (brushIntervalRef.current) {
+      clearInterval(brushIntervalRef.current);
+      brushIntervalRef.current = null;
+    }
+    brush.style.opacity = "0";
+    brush.style.transform = "translateX(0) rotate(0deg)";
+    setBrushing(false);
+    setCap("All clean — minty fresh! 🪥");
+    sound?.play("success");
+  }
+}
+
+
+
+      const hitPct = Math.min(100, hits * 8);
+      const severityPct = Math.min(100, Math.max(0, sevBar));
+
+      return (
+        <Card
+          title="Level 1 – Candy Crack (Cause & Clean)"
+          footer={<div>
+            <p className="mb-1">Goal: Drop candy to make cracks, then brush side-to-side to reduce severity back to <b>0</b>.</p>
+            <p>Unlock <b>Next Level</b> after you’ve dropped candy at least once and fully cleaned the tooth.</p>
+          </div>}
+        >
+          <div className="flex flex-wrap items-center gap-2 mb-4">
+            <Button onClick={dropCandy}>🍬 Drop Candy</Button>
+            <Button variant="ghost" onClick={runBrush}>🪥 Toothbrush</Button>
+            <Button variant="ghost" onClick={resetAll}>Reset</Button>
+            <Button variant="success" disabled={!canNext} onClick={() => onComplete?.()}>Next Level ▶</Button>
+            <span className="text-sm text-gray-600">{cap}</span>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4 mb-3">
+            <div>
+              <div className="flex items-center justify-between text-xs text-gray-600 mb-1">
+                <span>Candy hits</span><span className="font-semibold">{hits}</span>
+              </div>
+              <div className="w-full bg-gray-200 rounded-full h-3">
+                <div className="h-3 rounded-full bg-cyan-500 transition-all" style={{width:`${hitPct}%`}} />
+              </div>
+            </div>
+            <div>
+              <div className="flex items-center justify-between text-xs text-gray-600 mb-1">
+                <span>Crack severity</span><span className="font-semibold">{Math.round(severity)}</span>
+              </div>
+              <div className="w-full bg-gray-200 rounded-full h-3">
+                <div className="h-3 rounded-full bg-rose-500" style={{width:`${severityPct.toFixed(1)}%`}} />
+              </div>
+            </div>
+          </div>
+
+          <div ref={sceneRef} className="relative h-[420px] rounded-2xl overflow-hidden bg-gradient-to-b from-sky-100 to-sky-200 border border-sky-300">
+            <div className="absolute left-3 bottom-3 bg-white/80 text-slate-800 text-sm px-3 py-2 rounded-xl border border-white">
+              {cap}
+            </div>
+
+            <svg id="toothSVG" viewBox="0 0 400 360" className="w-full h-full">
+              <defs>
+                <radialGradient id="enamelGrad" cx="50%" cy="35%" r="65%">
+                  <stop offset="0%" stopColor="#ffffff"/><stop offset="70%" stopColor="#f3f6fb"/><stop offset="100%" stopColor="#e6ebf2"/>
+                </radialGradient>
+                <filter id="soft" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="6"/></filter>
+              </defs>
+
+              <path id="plaque" d="M200 48 C160 30,114 62,118 116 C122 170,152 188,164 226 C176 266,184 308,200 308
+                                    C216 308,224 266,236 226 C248 188,278 170,282 116 C286 62,240 30,200 48 Z"
+                    fill="#e8d57a" opacity="0.10" filter="url(#soft)"></path>
+
+              <path d="M200 48 C160 30,114 62,118 116 C122 170,152 188,164 226 C176 266,184 308,200 308
+                       C216 308,224 266,236 226 C248 188,278 170,282 116 C286 62,240 30,200 48 Z"
+                    fill="url(#enamelGrad)" stroke="#d1d9e6" strokeWidth="1.2"></path>
+
+              <g id="cracks" fill="none" stroke="#4b3b34" strokeLinecap="round" strokeLinejoin="round" opacity="0.0">
+                <path id="mainCrack" d="M190 115 C 196 126, 202 140, 208 154 C 210 160, 206 170, 212 182"/>
+                <path id="branch1" d="M202 138 C 190 146, 182 154, 176 162" opacity="0"/>
+                <path id="branch2" d="M206 152 C 220 160, 230 168, 236 176" opacity="0"/>
+                <path id="branch3" d="M196 132 C 188 124, 180 120, 172 118" opacity="0"/>
+              </g>
+
+              <circle id="pit" cx="206" cy="152" r="0.1" fill="#3b2b25" opacity="0.0"></circle>
+            </svg>
+
+            <div id="brush" className="absolute left-[-9999px] top-0 opacity-0 w-40 h-9 rounded-lg bg-blue-500 shadow-md flex items-center pl-4 gap-2 will-change-transform">
+              <div className="w-20 h-4 bg-blue-200 rounded"></div>
+              <div id="foam" className="absolute left-16 top-1 w-20 h-6 rounded-full bg-white/80 blur-[1px] opacity-0"></div>
+            </div>
+          </div>
+        </Card>
+      );
+    }
+
+    /* -----------------------------------------
+       Level 2: Brush Boss
+       ----------------------------------------- */
+    function BrushBoss({ onComplete, onFail }) {
+      const sound = useSound();
+      const cols = 10, rows = 2, total = cols * rows;
+      const [grid, setGrid] = useState(() => {
+        const arr = Array(total).fill(false);
+        let dirty = 10;
+        while (dirty > 0) {
+          const i = Math.floor(Math.random() * total);
+          if (!arr[i]) { arr[i] = true; dirty--; }
+        }
+        return arr;
+      });
+      const cleaned = useMemo(() => 10 - grid.filter(Boolean).length, [grid]);
+      const time = useTimer(true, 30, () => { sound?.play("fail"); onFail?.(); });
+      const [brushing, setBrushing] = useState(false);
+
+      useEffect(() => {
+        if (cleaned >= 10) { sound?.play("success"); onComplete?.(); }
+      }, [cleaned, onComplete, sound]);
+
+      const cleanIndex = (idx) => {
+        setGrid(g => {
+          if (!g[idx]) return g;
+          const copy = g.slice();
+          copy[idx] = false;
+          return copy;
+        });
+        sound?.play("clean");
+      };
+
+      return (
+        <Card
+          title="Level 2 – Brush Boss (OHI)"
+          footer={<div>
+            <p className="mb-1">Tip: Brush all surfaces in small circles for 2 minutes, twice a day.</p>
+            <p>Goal: Clean the <b>10 yellow teeth</b>.</p>
+          </div>}
+        >
+          <div className="flex items-center justify-between mb-3">
+            <div className="text-sm">Time: <span className="font-semibold">{time}s</span></div>
+            <div className="text-sm">Cleaned: <span className="font-semibold">{cleaned}/10</span></div>
+          </div>
+          <Progress value={(cleaned / 10) * 100} />
+
+          <div
+            className="select-none grid mt-3 gap-1"
+            style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
+            onMouseDown={() => setBrushing(true)}
+            onMouseUp={() => setBrushing(false)}
+            onMouseLeave={() => setBrushing(false)}
+            onTouchStart={() => setBrushing(true)}
+            onTouchEnd={() => setBrushing(false)}
+          >
+            {grid.map((hasPlaque, i) => {
+              const col = i % cols;
+              const row = Math.floor(i / cols);
+              const type = PRIMARY_ARCH[col];
+              const flipped = row === 0;
+              return (
+                <div
+                  key={i}
+                  className="flex items-center justify-center"
+                  data-idx={i}
+                  onMouseEnter={() => brushing && cleanIndex(i)}
+                  onMouseDown={() => cleanIndex(i)}
+                  onTouchMove={(e) => {
+                    const t = e.touches?.[0] || e.changedTouches?.[0];
+                    if (!t) return;
+                    const el = document.elementFromPoint(t.clientX, t.clientY);
+                    const idx = Number(el?.dataset?.idx);
+                    if (!Number.isNaN(idx)) cleanIndex(idx);
+                  }}
+                >
+                  <div className={`transform ${flipped ? "-scale-y-100" : ""}`} data-idx={i}>
+                    <Tooth clean={!hasPlaque} type={type} size="w-10 h-12 md:w-12 md:h-14" />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      );
+    }
+
+    /* -------------------------------------------------------------
+       Level 3: Floss Frenzy
+       ------------------------------------------------------------- */
+    function FlossFrenzy({ onComplete, onFail }) {
+      const sound = useSound();
+      const gapsPerRow = 5;
+      const rows = 2;
+      const totalGaps = gapsPerRow * rows;
+
+      const [gaps, setGaps] = useState(() => {
+        const arr = Array(totalGaps).fill(false);
+        let debris = 6;
+        while (debris > 0) {
+          const i = Math.floor(Math.random() * totalGaps);
+          if (!arr[i]) { arr[i] = true; debris--; }
+        }
+        return arr;
+      });
+
+      const time = useTimer(true, 25, () => { sound?.play("fail"); onFail?.(); });
+      const cleared = useMemo(() => gaps.filter(v => !v).length, [gaps]);
+
+      useEffect(() => {
+        if (cleared === totalGaps) { sound?.play("success"); onComplete?.(); }
+      }, [cleared, totalGaps, onComplete, sound]);
+
+      const flossGap = (i) => setGaps(g => {
+        if (!g[i]) return g;
+        const copy = g.slice();
+        copy[i] = false;
+        return copy;
+      });
+
+      const Gap = ({ dirty, onDrag, idx }) => (
+        <div
+          className={`w-2 h-12 mx-1 rounded-md border transition-all ${dirty ? "bg-yellow-300 border-yellow-400" : "bg-white border-gray-300"}`}
+          onMouseDown={() => { onDrag(); sound?.play("floss"); }}
+          onMouseEnter={(e) => { if (e.buttons === 1) { onDrag(); sound?.play("floss"); } }}
+          onTouchStart={() => { onDrag(); sound?.play("floss"); }}
+          data-idx={idx}
+        />
+      );
+
+      const Row = ({ rowIndex }) => {
+        const start = rowIndex * gapsPerRow;
+        const flipped = rowIndex === 0;
+        const segments = [];
+        for (let t = 0; t < 6; t++) {
+          const type = ANTERIOR_ARCH[t];
+          segments.push(
+            <div key={`t-${rowIndex}-${t}`} className={`transform ${flipped ? "-scale-y-100" : ""}`}>
+              <Tooth size="w-9 h-11 md:w-11 md:h-13" clean type={type} />
+            </div>
+          );
+          if (t < 5) {
+            const gi = start + t;
+            segments.push(
+              <div key={`gwrap-${gi}`} className={`flex items-center ${flipped ? "transform -scale-y-100" : ""}`}>
+                <Gap dirty={gaps[gi]} idx={gi} onDrag={() => flossGap(gi)} />
+              </div>
+            );
+          }
+        }
+        return (
+          <div className="flex items-center justify-center my-1">{segments}</div>
+        );
+      };
+
+      return (
+        <Card
+          title="Level 3 – Floss Frenzy (Anterior Only)"
+          footer={<div>
+            <p className="mb-1">Tip: Slide floss gently, wrap in a “C” shape, and move up & down.</p>
+            <p>Goal: Clear all <b>contacts</b> between the 6 upper and 6 lower anterior teeth.</p>
+          </div>}
+        >
+          <div className="flex items-center justify-between mb-3">
+            <div className="text-sm">Time: <span className="font-semibold">{time}s</span></div>
+            <div className="text-sm">Gaps Cleaned: <span className="font-semibold">{cleared}/{totalGaps}</span></div>
+          </div>
+          <Progress value={(cleared / totalGaps) * 100} />
+          <div className="mt-3 overflow-x-auto no-select">
+            <Row rowIndex={0} />
+            <Row rowIndex={1} />
+          </div>
+        </Card>
+      );
+    }
+
+    /* -------------------------------
+       Level 4: Sealant Splash
+       ------------------------------- */
+    function SealantSplash({ onComplete, onFail }) {
+      const sound = useSound();
+      const canvasRef = useRef(null);
+      const [coveredPct, setCoveredPct] = useState(0);
+      const [painting, setPainting] = useState(false);
+      const time = useTimer(true, 35, () => { sound?.play("fail"); onFail?.(); });
+
+      useEffect(() => {
+        const canvas = canvasRef.current;
+        const ctx = canvas.getContext("2d");
+        const W = canvas.width, H = canvas.height;
+        ctx.clearRect(0, 0, W, H);
+        ctx.fillStyle = "#ffffff";
+        ctx.strokeStyle = "#cbd5e1";
+        ctx.lineWidth = 3;
+
+        ctx.beginPath();
+        ctx.moveTo(W * 0.2, H * 0.6);
+        ctx.quadraticCurveTo(W * 0.2, H * 0.2, W * 0.5, H * 0.2);
+        ctx.quadraticCurveTo(W * 0.8, H * 0.2, W * 0.8, H * 0.6);
+        ctx.quadraticCurveTo(W * 0.8, H * 0.85, W * 0.65, H * 0.9);
+        ctx.quadraticCurveTo(W * 0.5, H * 0.95, W * 0.35, H * 0.9);
+        ctx.quadraticCurveTo(W * 0.2, H * 0.85, W * 0.2, H * 0.6);
+        ctx.closePath(); ctx.fill(); ctx.stroke();
+
+        ctx.strokeStyle = "#64748b"; ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(W * 0.3, H * 0.5);
+        ctx.bezierCurveTo(W * 0.4, H * 0.45, W * 0.6, H * 0.55, W * 0.7, H * 0.5);
+        ctx.moveTo(W * 0.5, H * 0.3);
+        ctx.bezierCurveTo(W * 0.5, H * 0.45, W * 0.55, H * 0.6, W * 0.5, H * 0.7);
+        ctx.stroke();
+      }, []);
+
+      const computeStats = () => {
+        const canvas = canvasRef.current;
+        const ctx = canvas.getContext("2d");
+        const W = canvas.width, H = canvas.height;
+        const img = ctx.getImageData(0, 0, W, H).data;
+
+        let blueish = 0, white = 0;
+        for (let i = 0; i < img.length; i += 4 * 8) {
+          const r = img[i], g = img[i + 1], b = img[i + 2], a = img[i + 3];
+          if (r > 230 && g > 230 && b > 230) white++;
+          if (b > 150 && r < 120 && a > 0) blueish++;
+        }
+        const pct = Math.min(100, Math.round((blueish / (white + blueish + 1)) * 100));
+
+        const band = 15;
+        let vBlue = 0, vTotal = 0, hBlue = 0, hTotal = 0;
+        for (let x = Math.floor(W/2 - band); x <= Math.floor(W/2 + band); x++) {
+          for (let y = 0; y < H; y++) {
+            const idx = (y * W + x) * 4;
+            const r = img[idx], g = img[idx+1], b = img[idx+2], a = img[idx+3];
+            if (a === 0) continue; vTotal++; if (b > 150 && r < 120) vBlue++;
+          }
+        }
+        for (let y = Math.floor(H/2 - band); y <= Math.floor(H/2 + band); y++) {
+          for (let x = 0; x < W; x++) {
+            const idx = (y * W + x) * 4;
+            const r = img[idx], g = img[idx+1], b = img[idx+2], a = img[idx+3];
+            if (a === 0) continue; hTotal++; if (b > 150 && r < 120) hBlue++;
+          }
+        }
+        const isCross = (vBlue/Math.max(1,vTotal)) > 0.35 && (hBlue/Math.max(1,hTotal)) > 0.35;
+        return { pct, isCross };
+      };
+
+      const paint = (x, y) => {
+        const canvas = canvasRef.current;
+        const ctx = canvas.getContext("2d");
+        ctx.globalCompositeOperation = "source-over";
+        ctx.fillStyle = "rgba(59,130,246,0.6)";
+        ctx.beginPath(); ctx.arc(x, y, 12, 0, Math.PI * 2); ctx.fill();
+        sound?.play("paint");
+
+        const { pct, isCross } = computeStats();
+        setCoveredPct(pct);
+        if (pct >= 20 || isCross) { sound?.play("success"); onComplete?.(); }
+      };
+
+      const handlePointer = (clientX, clientY) => {
+        const rect = canvasRef.current.getBoundingClientRect();
+        const x = clientX - rect.left, y = clientY - rect.top;
+        if (painting) paint(x, y);
+      };
+
+      return (
+        <Card
+          title="Level 4 – Sealant Splash"
+          footer={<div>
+            <p className="mb-1">Fact: Sealants protect deep grooves of molars.</p>
+            <p>Goal: Draw a cross through the center <b>or</b> reach <b>≥20%</b> coverage before time runs out.</p>
+          </div>}
+        >
+          <div className="flex items-center justify-between mb-3">
+            <div className="text-sm">Time: <span className="font-semibold">{time}s</span></div>
+            <div className="text-sm">Coverage: <span className="font-semibold">{coveredPct}%</span></div>
+          </div>
+          <canvas
+            ref={canvasRef}
+            width={520}
+            height={320}
+            className="bg-white rounded-2xl border border-gray-200 touch-none"
+            onMouseDown={() => setPainting(true)}
+            onMouseUp={() => setPainting(false)}
+            onMouseLeave={() => setPainting(false)}
+            onMouseMove={(e) => handlePointer(e.clientX, e.clientY)}
+            onTouchStart={() => setPainting(true)}
+            onTouchEnd={() => setPainting(false)}
+            onTouchMove={(e) => {
+              const t = e.touches?.[0] || e.changedTouches?.[0];
+              if (t) handlePointer(t.clientX, t.clientY);
+            }}
+          />
+          <div className="mt-3 text-sm text-gray-600">Tip: Tap or drag to paint the blue sealant.</div>
+        </Card>
+      );
+    }
+
+    /* --------------------------------
+       Level 5: Checkup Challenge
+       -------------------------------- */
+    function CheckupChallenge({ onComplete, onFail }) {
+      const sound = useSound();
+      const [months, setMonths] = useState(Array.from({ length: 12 }, (_, i) => ({ i, appt: false })));
+      const [msg, setMsg] = useState("");
+
+      const toggleMonth = (i) => {
+        setMonths(arr => arr.map(m => (m.i === i ? { ...m, appt: !m.appt } : m)));
+        setMsg("");
+        sound?.play("click");
+      };
+
+      const validate = () => {
+        const picks = months.filter(m => m.appt).map(m => m.i).sort((a,b) => a-b);
+        if (picks.length !== 4) { setMsg("Select exactly FOUR checkups for a 3-month interval plan."); sound?.play("fail"); onFail?.(); return; }
+        for (let k = 0; k < 4; k++) {
+          const a = picks[k], b = picks[(k+1)%4];
+          const diff = (b - a + 12) % 12;
+          if (diff !== 3) { setMsg("Intervals must be exactly 3 months apart."); sound?.play("fail"); onFail?.(); return; }
+        }
+        setMsg("Great plan! Four visits, each 3 months apart.");
+        sound?.play("success");
+        onComplete?.();
+      };
+
+      return (
+        <Card
+          title="Level 5 – Checkup Challenge (High-risk = every 3 months)"
+          footer={<div>
+            <p className="mb-1">Goal: Choose <b>four</b> months, exactly 3 apart (e.g., Jan/Apr/Jul/Oct).</p>
+          </div>}
+        >
+          <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+            {months.map((m) => (
+              <button
+                key={m.i}
+                onClick={() => toggleMonth(m.i)}
+                className={`h-20 rounded-2xl border flex items-center justify-center text-lg font-semibold transition-all ${
+                  m.appt ? "bg-emerald-100 border-emerald-400" : "bg-white border-gray-200 hover:bg-gray-50"
+                }`}
+                aria-label={`Month ${m.i + 1}${m.appt ? " appointment set" : ""}`}
+              >
+                {new Date(2025, m.i, 1).toLocaleString(undefined, { month: "short" })}
+                {m.appt && <span className="ml-2">🦷</span>}
+              </button>
+            ))}
+          </div>
+          <div className="mt-4 flex items-center">
+            <Button onClick={validate}>Submit Plan</Button>
+            {msg && <span className="ml-3 text-sm">{msg}</span>}
+          </div>
+        </Card>
+      );
+    }
+
+    const FactBanner = ({ text }) => (
+      <div className="bg-amber-50 border border-amber-200 text-amber-900 p-3 rounded-xl text-sm">{text}</div>
+    );
+
+   /* -------------- App Shell -------------- */
+function CariesPreventionGame() {
+  const [level, setLevel] = useState(0);
+  const [score, setScore] = useState(0);
+  const [showHowTo, setShowHowTo] = useState(true);
+
+  const soundRef = useRef(new SoundEngine());
+  const sound = soundRef.current;
+
+  const next = () => setLevel(l => l + 1);
+
+  // Auto-start audio + music on the very first user interaction anywhere
+  useEffect(() => {
+    const unlock = () => {
+      sound.start();                       // unlock AudioContext
+      if (!sound.musicOn) sound.toggleMusic(); // ensure music is ON
+      cleanup();
+    };
+    const cleanup = () => {
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
+      window.removeEventListener("touchstart", unlock);
+    };
+    window.addEventListener("pointerdown", unlock);
+    window.addEventListener("keydown", unlock);
+    window.addEventListener("touchstart", unlock);
+    return cleanup;
+  }, []); // sound from useRef is stable
+
+  // Start button also guarantees music is ON
+  const startGame = () => {
+    sound.start();                       // unlock audio
+    if (!sound.musicOn) sound.toggleMusic(); // turn ON (no double toggle)
+    setShowHowTo(false);
+  };
+
+
+
+
+      return (
+        <SoundContext.Provider value={sound}>
+          <div className="min-h-screen w-full bg-gradient-to-b from-sky-50 to-white flex flex-col items-center px-4 py-8">
+            <div className="w-full max-w-4xl flex items-center justify-between mb-6">
+              <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Caries Prevention Quest</h1>
+              <div className="flex items-center gap-3 text-sm text-gray-600">
+                <span>Score: <span className="font-semibold">{score}</span></span>
+                <div className="flex items-center gap-1">
+                  <button
+                    className="px-2 py-1 rounded-lg border border-gray-300 bg-white hover:bg-gray-50"
+                    onClick={() => sound.toggleMusic()}
+                    title="Toggle music"
+                  >♪ Music</button>
+                  <button
+                    className="px-2 py-1 rounded-lg border border-gray-300 bg-white hover:bg-gray-50"
+                    onClick={() => sound.toggleMute()}
+                    title="Mute all"
+                  >🔇 Mute</button>
+                </div>
+              </div>
+            </div>
+
+            {showHowTo && (
+              <Card title="How to Play">
+                <ul className="list-disc ml-6 text-sm text-gray-700 space-y-1">
+                  <li><b>Level 1 – Candy Crack:</b> Drop candy to make cracks, then brush side-to-side to clean back to 0.</li>
+                  <li><b>Level 2 – Brush Boss:</b> 20 primary teeth (2×10). Clean the 10 yellow ones.</li>
+                  <li><b>Level 3 – Floss Frenzy:</b> Anterior only (6 upper + 6 lower). Clear all contacts.</li>
+                  <li><b>Level 4 – Sealant Splash:</b> Draw a cross or reach ≥20% coverage.</li>
+                  <li><b>Level 5 – Checkup Challenge:</b> High-risk recall every 3 months.</li>
+                </ul>
+                <div className="mt-4">
+                  <Button onClick={startGame} variant="success">Start</Button>
+                </div>
+              </Card>
+            )}
+
+            {!showHowTo && level === 0 && (
+              <CandyCrack onComplete={() => { setScore(s => s + 80); next(); }} />
+            )}
+
+            {level === 1 && (
+              <BrushBoss
+                onComplete={() => { setScore(s => s + 100); next(); }}
+                onFail={() => { setScore(s => Math.max(0, s - 20)); next(); }}
+              />
+            )}
+
+            {level === 2 && (
+              <div className="w-full flex flex-col items-center gap-4">
+                <FactBanner text="Floss once a day. Curve around each tooth in a “C” shape and move up & down." />
+                <FlossFrenzy
+                  onComplete={() => { setScore(s => s + 100); next(); }}
+                  onFail={() => { setScore(s => Math.max(0, s - 20)); next(); }}
+                />
+              </div>
+            )}
+
+            {level === 3 && (
+              <div className="w-full flex flex-col items-center gap-4">
+                <FactBanner text="Sealants protect deep grooves of molars and reduce cavities." />
+                <SealantSplash
+                  onComplete={() => { setScore(s => s + 120); next(); }}
+                  onFail={() => { setScore(s => Math.max(0, s - 20)); next(); }}
+                />
+              </div>
+            )}
+
+            {level === 4 && (
+              <div className="w-full flex flex-col items-center gap-4">
+                <FactBanner text="High-risk children often need recall every 3 months for fluoride, sealants, and early detection." />
+                <CheckupChallenge
+                  onComplete={() => { setScore(s => s + 80); next(); }}
+                  onFail={() => { setScore(s => Math.max(0, s - 20)); }}
+                />
+              </div>
+            )}
+
+            {level >= 5 && (
+              <Card title="You Did It!">
+                <p className="text-gray-700">
+                  You mastered <b>candy risk</b>, <b>brushing</b>, <b>flossing</b>, <b>sealants</b>, and <b>regular checkups</b>.
+                </p>
+                <ul className="list-disc ml-6 mt-3 text-gray-700 text-sm">
+                  <li>Limit sugary snacks; rinse or brush after treats.</li>
+                  <li>Brush 2×/day for 2 minutes with fluoride toothpaste.</li>
+                  <li>Floss once a day to clean where brushes can’t reach.</li>
+                  <li>Ask about sealants for new molars.</li>
+                  <li>High-risk recall: every 3 months.</li>
+                </ul>
+                <div className="mt-4 flex items-center">
+                  <Button onClick={() => { window.location.reload(); }}>Play Again</Button>
+                  <Button variant="ghost" onClick={() => window.print()}>Print Tips</Button>
+                </div>
+              </Card>
+            )}
+
+            <footer className="mt-8 text-xs text-gray-500">WesternU Dental Medicine.</footer>
+          </div>
+        </SoundContext.Provider>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<CariesPreventionGame />);
+  </script>
+</body>
+</html>
+
+
